@@ -1,0 +1,36 @@
+version: 1
+settings:
+  analyze_drafts: false
+  ignore_authors:
+    - dependabot[bot]
+    - renovate[bot]
+  target_branches:
+    - main
+    - production
+  post_empty_checklist: false
+  max_diff_size: 100000
+
+rules:
+  - id: migration-safety
+    description: "Database migration detected"
+    trigger:
+      paths:
+        - "migrations/**"
+        - "db/migrate/**"
+    checks:
+      - "Verify a corresponding rollback/down migration exists"
+      - "Check that the migration is backward-compatible"
+
+  - id: env-var-check
+    description: "Environment variable change detected"
+    trigger:
+      content:
+        - "process\\.env\\."
+        - "os\\.environ"
+    checks:
+      - "Verify new environment variables are documented"
+      - "Confirm variables are set in all deployment environments"
+
+context: |
+  Node.js backend service on Kubernetes.
+  Uses PostgreSQL and Redis.

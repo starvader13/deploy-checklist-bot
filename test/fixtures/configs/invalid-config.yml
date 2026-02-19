@@ -1,0 +1,4 @@
+version: "not a number"
+settings:
+  analyze_drafts: "yes please"
+rules: "this should be an array"

@@ -1,0 +1,8 @@
+version: 1
+rules:
+  - id: custom-check
+    description: "Custom check"
+    trigger:
+      paths: ["src/**"]
+    checks:
+      - "Review the changes"

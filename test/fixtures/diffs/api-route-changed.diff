@@ -1,0 +1,19 @@
+diff --git a/src/routes/users.ts b/src/routes/users.ts
+index aaa1111..bbb2222 100644
+--- a/src/routes/users.ts
++++ b/src/routes/users.ts
+@@ -10,8 +10,12 @@ router.get('/users', async (req, res) => {
+   res.json(users);
+ });
+
+-router.get('/users/:id', async (req, res) => {
+-  const user = await db.getUser(req.params.id);
++router.get('/v2/users/:id', async (req, res) => {
++  const user = await db.getUser(req.params.id, { includeProfile: true });
++  res.json(user);
++});
++
++router.delete('/v2/users/:id', async (req, res) => {
++  await db.deleteUser(req.params.id);
+   res.json(user);
+ });

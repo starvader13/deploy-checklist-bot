@@ -1,0 +1,14 @@
+diff --git a/src/db/connection.ts b/src/db/connection.ts
+index 1234567..abcdefg 100644
+--- a/src/db/connection.ts
++++ b/src/db/connection.ts
+@@ -1,5 +1,8 @@
+ import { Pool } from 'pg';
+
+-const pool = new Pool({ connectionString: 'postgres://localhost/mydb' });
++const pool = new Pool({
++  connectionString: process.env.DATABASE_URL,
++  ssl: process.env.DB_SSL === 'true'
++});
+
+ export default pool;
