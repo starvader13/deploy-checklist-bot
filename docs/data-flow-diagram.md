@@ -35,10 +35,10 @@ three external entities.
  ┌────────────────┐                                          ┌────────────────┐
  │                │   D1: Webhook Event                      │                │
  │   Developer    │──(opens/updates PR,──────────────────────│    GitHub      │
- │                │    checks checkbox)                       │   Platform     │
+ │                │    checks checkbox)                      │   Platform     │
  │                │                                          │                │
  │                │◄──D8: PR Status ─────────────────────────│                │
- │                │   (blocked/approved)                      │                │
+ │                │   (blocked/approved)                     │                │
  └────────────────┘                                          └───────┬────────┘
                                                                      │
                                                       D2: Webhook    │  D7: Review +
@@ -58,8 +58,8 @@ three external entities.
                                                           │                     │
                                                           ▼                     ▼
                                                    ┌─────────────┐    ┌────────────────┐
-                                                   │  Claude AI   │    │   Repository   │
-                                                   │  (Anthropic) │    │   File Store   │
+                                                   │  Claude AI  │    │   Repository   │
+                                                   │  (Anthropic)│    │   File Store   │
                                                    └─────────────┘    └────────────────┘
                                                           │                     │
                                                    D6: Checklist         D4: Config
@@ -106,7 +106,7 @@ data flowing between them and to/from external entities.
                               │                     │
                               │  - Route by event   │
                               │  - Filter (drafts,  │
-                              │    authors, branches)│
+                              │    authors,branches)│
                               │  - Debounce pushes  │
                               └──┬──────┬───────┬───┘
                                  │      │       │
@@ -140,21 +140,21 @@ data flowing between them and to/from external entities.
                        (items + summary)  │                         │
                             │             │                         │
                             ▼             ▼                         ▼
-                    ┌────────────────────────────────────────────────────┐
-                    │  P5: Review Manager                                │
-                    │                                                    │
-                    │  - Dismiss stale bot reviews                       │
-                    │  - Post REQUEST_CHANGES or APPROVE review          │
-                    │  - Post/update checklist comment                   │
-                    │  - Post error comments (never block on errors)     │
+                    ┌───────────────────────────────────────────────────┐
+                    │  P5: Review Manager                               │
+                    │                                                   │
+                    │  - Dismiss stale bot reviews                      │
+                    │  - Post REQUEST_CHANGES or APPROVE review         │
+                    │  - Post/update checklist comment                  │
+                    │  - Post error comments (never block on errors)    │
                     └──────────────────────┬────────────────────────────┘
                                            │
                                     D7: Review + Comment
                                            │
                                            ▼
                                     ┌─────────────┐
-                                    │   GitHub     │
-                                    │   Platform   │
+                                    │   GitHub    │
+                                    │   Platform  │
                                     └─────────────┘
 ```
 
@@ -171,11 +171,11 @@ data flowing between them and to/from external entities.
 ### Data Flows (Level 1)
 
 | ID  | Flow                    | From → To         | Description                                                       |
-|-----|-------------------------|--------------------|-------------------------------------------------------------------|
+|-----|-------------------------|-------------------|-------------------------------------------------------------------|
 | D9  | Config Request          | P1 → P2           | Owner, repo, SHA to load config from                              |
 | D10 | Validated Config        | P2 → P1, P3       | Parsed `DeployChecklistConfig` with merged defaults               |
 | D11 | PR Number + Diff Req    | P1 → P3           | PR identifier for fetching diff from GitHub API                   |
-| D12 | Raw Diff                | GitHub → P3        | Unified diff content (via `Accept: application/vnd.github.diff`)  |
+| D12 | Raw Diff                | GitHub → P3       | Unified diff content (via `Accept: application/vnd.github.diff`)  |
 | D13 | Analysis Result         | P3 → P4, P5       | `AnalysisResult` with checklist items, priorities, summary        |
 | D14 | Checklist Markdown      | P4 → P5           | Rendered markdown string with checkboxes and metadata             |
 | D15 | Comment Body            | P1 → P4           | Existing comment text (for parsing on `issue_comment.edited`)     |
