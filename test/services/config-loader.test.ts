@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   DeployChecklistConfigSchema,
-  DEFAULT_RULES,
   type DeployChecklistConfig,
 } from "../../src/schemas/config.js";
 
@@ -131,32 +130,3 @@ describe("DeployChecklistConfigSchema", () => {
   });
 });
 
-describe("DEFAULT_RULES", () => {
-  it("has 5 default rules", () => {
-    expect(DEFAULT_RULES).toHaveLength(5);
-  });
-
-  it("includes migration, migration-review, env, CI, and deps rules", () => {
-    const ids = DEFAULT_RULES.map((r) => r.id);
-    expect(ids).toContain("default-migration");
-    expect(ids).toContain("default-migration-review");
-    expect(ids).toContain("default-env");
-    expect(ids).toContain("default-ci");
-    expect(ids).toContain("default-deps");
-  });
-
-  it("each rule has at least one trigger type", () => {
-    for (const rule of DEFAULT_RULES) {
-      const hasPaths = (rule.trigger.paths?.length ?? 0) > 0;
-      const hasContent = (rule.trigger.content?.length ?? 0) > 0;
-      const hasCompanion = (rule.trigger.missing_companion?.length ?? 0) > 0;
-      expect(hasPaths || hasContent || hasCompanion).toBe(true);
-    }
-  });
-
-  it("each rule has at least one check", () => {
-    for (const rule of DEFAULT_RULES) {
-      expect(rule.checks.length).toBeGreaterThan(0);
-    }
-  });
-});

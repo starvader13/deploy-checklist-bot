@@ -2,7 +2,6 @@ import { parse as parseYaml } from "yaml";
 import type { Context } from "probot";
 import {
   DeployChecklistConfigSchema,
-  DEFAULT_RULES,
   type DeployChecklistConfig,
 } from "../schemas/config.js";
 
@@ -65,7 +64,7 @@ function parseConfigContent(
   return parseYaml(content) as Record<string, unknown>;
 }
 
-/** Build a default config using built-in rules. */
+/** Build a default config. Built-in skills handle concern detection — no default rules needed. */
 function buildDefaultConfig(): DeployChecklistConfig {
   return {
     version: 1,
@@ -76,25 +75,7 @@ function buildDefaultConfig(): DeployChecklistConfig {
       post_empty_checklist: false,
       max_diff_size: 100000,
     },
-    rules: DEFAULT_RULES,
-  };
-}
-
-/**
- * Merge user rules with defaults — user rules with the same ID override defaults.
- * Defaults not overridden are kept, so the user gets built-in rules for free.
- */
-function mergeWithDefaults(
-  config: DeployChecklistConfig
-): DeployChecklistConfig {
-  const userRuleIds = new Set(config.rules.map((r) => r.id));
-  const defaultsToKeep = DEFAULT_RULES.filter(
-    (r) => !userRuleIds.has(r.id)
-  );
-
-  return {
-    ...config,
-    rules: [...defaultsToKeep, ...config.rules],
+    rules: [],
   };
 }
 
@@ -127,8 +108,7 @@ export async function loadConfig(
       }
 
       const parsed = DeployChecklistConfigSchema.parse(raw);
-      const merged = mergeWithDefaults(parsed);
-      return { config: merged };
+      return { config: parsed };
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : String(error);
