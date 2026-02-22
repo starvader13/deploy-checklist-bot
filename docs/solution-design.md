@@ -54,19 +54,29 @@ Common failure modes:
 │  │ Webhook Handlers │───►│ Diff Analyzer   │                 │
 │  │                 │    │ Service         │                 │
 │  │ - onPROpened    │    │                 │──► Claude API    │
-│  │ - onPRSynced    │    │ - fetchDiff()   │                 │
+│  │ - onPRSynced    │    │ - fetchDiff()   │   (tool use)    │
 │  │ - onCommentEdit │    │ - buildPrompt() │                 │
-│  └────────┬────────┘    │ - parseResult() │                 │
+│  └────────┬────────┘    │ - toolResult()  │                 │
 │           │             └────────┬────────┘                 │
 │           │                      │                           │
-│           ▼                      ▼                           │
-│  ┌─────────────────┐    ┌─────────────────┐                 │
-│  │ Config Loader   │    │ Checklist       │                 │
-│  │                 │    │ Service         │                 │
+│           ▼                      │                           │
+│  ┌─────────────────┐             │ uses                      │
+│  │ Config Loader   │    ┌────────▼────────┐                 │
+│  │                 │    │ Skills          │                 │
 │  │ - loadConfig()  │    │                 │                 │
-│  │ - validate()    │    │ - generate()    │                 │
-│  │ - defaults()    │    │ - parse()       │                 │
-│  └─────────────────┘    │ - evaluate()    │                 │
+│  │ - validate()    │    │ - detect()      │                 │
+│  └─────────────────┘    │ - systemContext │                 │
+│                          │ - 14 built-ins  │                 │
+│                          └────────┬────────┘                 │
+│                                   │                           │
+│                                   ▼                           │
+│                          ┌─────────────────┐                 │
+│                          │ Checklist       │                 │
+│                          │ Service         │                 │
+│                          │                 │                 │
+│                          │ - generate()    │                 │
+│                          │ - parse()       │                 │
+│                          │ - merge()       │                 │
 │                          └────────┬────────┘                 │
 │                                   │                           │
 │                                   ▼                           │
@@ -206,18 +216,30 @@ Developer          GitHub              Bot Server            Claude API
 - Validates against a JSON Schema; posts a warning comment if invalid
 - Merges user config with defaults (user rules extend, not replace)
 
-### 4.2 Diff Analyzer
+### 4.2 Skills
 
-**Responsibility**: Fetch the PR diff, construct a Claude prompt, and parse the structured response.
+**Responsibility**: Built-in concern-based domain knowledge that fires deterministically before Claude is called.
+
+**Key behaviors**:
+- 14 built-in skills covering universal deploy concerns (migrations, env vars, secrets, API contracts, infra, etc.)
+- Each skill has a `detect()` function that pattern-matches file paths and/or diff content — no AI involved
+- Only matching skills are sent to Claude (pre-filtering) — keeps the prompt focused
+- Each skill carries a `systemContext` string with multi-framework expertise (e.g. the migration skill knows Django, Prisma, Rails, Alembic, and raw SQL patterns)
+- `computeUncoveredFiles()` identifies changed files that no skill's path patterns cover — sent to Claude separately for opportunistic risk scanning
+
+### 4.3 Diff Analyzer
+
+**Responsibility**: Orchestrate skill detection, build the Claude prompt, and extract the structured response.
 
 **Key behaviors**:
 - Fetches diff via GitHub API (`GET /repos/{owner}/{repo}/pulls/{pull_number}` with `Accept: application/vnd.github.diff`)
-- Truncates diffs exceeding token budget (see Section 6)
-- Builds a prompt combining the diff, repo rules, and file context
-- Parses Claude's JSON response into typed checklist items
-- Retries on malformed responses (up to 2 retries with stricter formatting instructions)
+- Runs `detectActiveSkills()` — deterministic, zero-cost pre-filter before calling Claude
+- Converts active skills to `Rule[]` via `skillsToRules()` adapter so `truncateDiff` and `fetchTriggeredFileContents` need no changes
+- Merges skill-derived rules with user config rules for truncation prioritization
+- Calls Claude with `tool_choice: { type: "tool", name: "submit_analysis" }` — structured output is enforced at API level, no JSON parsing or retry logic needed
+- Parses `toolUseBlock.input` directly with Zod — already a parsed object
 
-### 4.3 Checklist Service
+### 4.4 Checklist Service
 
 **Responsibility**: Generate and parse markdown checklists, track completion state.
 
@@ -231,18 +253,27 @@ Developer          GitHub              Bot Server            Claude API
 The following items were identified for this PR. Check each item to confirm
 it has been addressed before merging.
 
-- [ ] **Add `DATABASE_URL` to production environment** — New env var
+> Medium risk — database migration and new env var detected.
+
+- [ ] **Add `DATABASE_URL` to production environment** 🟡 — New env var
   referenced in `src/db/connection.ts:14`. Ensure it is set in all
   deployment targets.
-  _Rule: env-var-check_
+  _Rule: env-vars_
 
-- [ ] **Verify migration rollback** — New migration file
-  `migrations/20240115_add_users.sql` detected. Confirm rollback SQL
-  is tested.
-  _Rule: migration-safety_
+- [ ] **Verify migration rollback for migrations/20240115_add_users.sql** 🔴 — New
+  migration detected. Confirm rollback SQL exists and is tested.
+  _Rule: migration-review_
+
+### Needs Manual Review
+
+The following files are not covered by any skill or rule — review manually:
+- `src/internal-tool/scheduler.ts`
+
+Potential deploy concerns in uncovered files:
+- **src/internal-tool/scheduler.ts**: Cron expression changed — verify frequency is intentional in production.
 
 ---
-_Generated by Deploy Checklist Bot | [Config docs](link) | Re-analyze: push a new commit_
+_Generated by Deploy Checklist Bot | Re-analyze: push a new commit_
 ```
 
 **Key behaviors**:
@@ -251,7 +282,7 @@ _Generated by Deploy Checklist Bot | [Config docs](link) | Re-analyze: push a ne
 - On re-analysis, merges old check state with new items (match by rule ID + file reference)
 - Exposes `isComplete()` to determine if all items are checked
 
-### 4.4 Review Manager
+### 4.5 Review Manager
 
 **Responsibility**: Manage GitHub PR review status.
 
@@ -262,7 +293,7 @@ _Generated by Deploy Checklist Bot | [Config docs](link) | Re-analyze: push a ne
 - Only operates on reviews authored by the bot (never touches human reviews)
 - If no checklist items are generated (clean diff), posts an approving review with a short note
 
-### 4.5 Webhook Handlers
+### 4.6 Webhook Handlers
 
 **Events handled**:
 
@@ -378,40 +409,11 @@ context: |
   anything touching the payments module.
 ```
 
-### Default Rules (No Config File)
+### No Config File
 
-When no config file is found, the bot applies a minimal set of sensible defaults:
-
-```yaml
-rules:
-  - id: default-migration
-    description: "Database migration detected"
-    trigger:
-      paths: ["**/migrations/**"]
-    checks:
-      - "Verify rollback strategy exists"
-
-  - id: default-env
-    description: "Environment variable change"
-    trigger:
-      content: ["process\\.env\\.", "os\\.environ"]
-    checks:
-      - "Confirm new env vars are set in deployment targets"
-
-  - id: default-ci
-    description: "CI/CD configuration changed"
-    trigger:
-      paths: [".github/workflows/**", ".gitlab-ci.yml", "Jenkinsfile"]
-    checks:
-      - "Review CI/CD changes for unintended side effects"
-
-  - id: default-deps
-    description: "Dependency change detected"
-    trigger:
-      paths: ["package-lock.json", "yarn.lock", "Gemfile.lock", "poetry.lock", "go.sum"]
-    checks:
-      - "Review dependency changes for security advisories"
-```
+When no config file is found, the bot runs with `rules: []` and `context: undefined`.
+The 14 built-in skills still fire automatically — no config file is needed for the bot
+to provide meaningful analysis. Custom rules and context are purely additive.
 
 ### Example: Frontend Repo Config
 
@@ -489,58 +491,46 @@ context: |
 
 ### Prompt Design Strategy
 
-The prompt follows a structured format to produce reliable, parseable output:
+The prompt is assembled in a deliberate order. Later sections carry more recency weight
+with LLMs, so repo-specific knowledge comes last to act as a correction layer over
+generic skill knowledge.
 
 ```
 System prompt:
-  You are a deploy checklist analyzer. You examine pull request diffs
-  against a set of deployment rules and determine which checklist items
-  apply. You respond ONLY with valid JSON matching the specified schema.
+  You are a deploy checklist analyzer. Use the submit_analysis tool
+  to return your findings.
 
 User prompt:
-  ## Repository Context
-  {config.context}
+  ## Active Skills
+  (only skills that fired — each with its systemContext and checks)
 
-  ## Rules
-  {formatted rules with IDs, triggers, and checks}
+  ## Custom Rules
+  (user-defined rules from config, if any)
+
+  ## Repository Context
+  (user's free-text context string — comes last to override skill defaults)
 
   ## PR Information
-  Title: {pr.title}
-  Description: {pr.body}
-  Base branch: {pr.base.ref}
-  Files changed: {file list}
+  Title / Description / Base branch / Files changed
+
+  ## Full File Contents  (optional — only for skills with includeFullFiles)
+  (entity/model files so Claude can identify ORM/framework)
+
+  ## Files Without Skill Coverage  (omitted when empty)
+  (files not matched by any skill path — Claude scans for opportunistic risks)
 
   ## Diff
-  ```diff
-  {truncated diff}
-  ```
+  (truncated to max_diff_size, prioritizing skill-matched files)
 
   ## Instructions
-  Analyze the diff against each rule. For each rule whose trigger
-  conditions match files in the diff, evaluate each check and determine
-  if it is relevant to the actual changes.
-
-  Respond with JSON matching this schema:
-  {
-    "items": [
-      {
-        "rule_id": "string — the rule ID that triggered this item",
-        "check": "string — the specific check from the rule",
-        "description": "string — a concise, actionable checklist item
-                        specific to this PR (reference exact files/lines)",
-        "reasoning": "string — brief explanation of why this check is
-                      relevant to the changes in this diff",
-        "priority": "high | medium | low"
-      }
-    ],
-    "summary": "string — one sentence summarizing overall deploy risk"
-  }
-
-  Only include items that are genuinely relevant to the diff. Do NOT
-  include items for rules whose triggers don't match. Be specific —
-  reference actual file names, function names, and line numbers from
-  the diff.
+  Use the submit_analysis tool to return your findings.
+  For each active skill, evaluate its checks against the diff.
+  Only include items genuinely relevant to the actual changes.
 ```
+
+**Why tool use instead of JSON prompting**: The `submit_analysis` tool enforces the response
+schema at the API level. Claude cannot return malformed output. This eliminates the retry
+loop and JSON fence stripping that the previous implementation required.
 
 ### Token Budget & Truncation Strategy
 
@@ -568,10 +558,11 @@ User prompt:
 
 ### Response Parsing
 
-- Parse Claude response as JSON
-- Validate against expected schema using Zod
-- On parse failure, retry once with a more explicit formatting instruction appended
-- On second failure, post a comment indicating analysis failed and link to manual checklist
+- Claude is called with `tool_choice: { type: "tool", name: "submit_analysis" }` — the API guarantees a `tool_use` content block
+- `toolUseBlock.input` is already a parsed JavaScript object — no `JSON.parse`, no markdown fence stripping
+- Validated against `AnalysisResultSchema` (Zod) — throws on unexpected shape
+- Single try/catch for real API errors (auth, network, 5xx) — no retry loop needed
+- On unrecoverable failure, returns `null` — caller posts an informational comment and does NOT block the PR
 
 ---
 
@@ -604,14 +595,16 @@ User prompt:
 ### Claude API Request Format
 
 ```typescript
-// Request to Anthropic SDK
+// Request to Anthropic SDK — tool use enforces structured output
 {
   model: "claude-sonnet-4-5-20250929",
-  max_tokens: 2000,
+  max_tokens: 4000,
   system: SYSTEM_PROMPT,
   messages: [
     { role: "user", content: constructedPrompt }
-  ]
+  ],
+  tools: [SUBMIT_ANALYSIS_TOOL],
+  tool_choice: { type: "tool", name: "submit_analysis" }
 }
 ```
 
@@ -647,11 +640,26 @@ interface Trigger {
   content?: string[];
 }
 
+// --- Skill types (built-in, src/skills/index.ts) ---
+
+interface Skill {
+  id: string;
+  name: string;
+  detect: (filesChanged: string[], diffContent: string) => boolean;
+  systemContext: string;
+  checks: string[];
+  paths: string[];
+  companionPaths?: string[];
+  includeFullFiles?: boolean;
+}
+
 // --- Analysis types ---
 
 interface AnalysisResult {
   items: ChecklistItem[];
   summary: string;
+  uncovered_files: string[];           // files not matched by any skill path
+  open_concerns: { file: string; concern: string }[];  // Claude-spotted risks in uncovered files
 }
 
 interface ChecklistItem {
@@ -739,11 +747,11 @@ interface PRMetadata {
 
 | Scenario                          | Handling                                            |
 |-----------------------------------|-----------------------------------------------------|
-| API timeout (>30s)                | Retry once with exponential backoff                  |
-| Rate limited (429)               | Retry after `Retry-After` header value               |
-| Malformed JSON response           | Retry once with stricter prompt; on second failure, post error comment |
+| API timeout (>30s)                | Single try/catch catches error, returns null → post error comment |
+| Rate limited (429)               | Caught by try/catch, returns null → post error comment           |
+| Schema mismatch in tool output    | Zod throws, caught by try/catch, returns null → post error comment |
 | API key invalid/expired           | Log error, post generic "analysis unavailable" comment, do NOT block PR |
-| Service outage (5xx)             | Retry up to 3 times with backoff; post error comment on exhaustion |
+| Service outage (5xx)             | Caught by try/catch, returns null → post error comment           |
 
 **Critical principle**: On unrecoverable failure, the bot must NOT block the PR. It should post an informational comment and either skip the review or post an APPROVE to avoid being a merge blocker.
 
@@ -863,7 +871,8 @@ interface PRMetadata {
 ```
 deploy-checklist-bot/
 ├── docs/
-│   └── solution-design.md          # This document
+│   ├── how-it-works.md             # User-facing guide (setup, flow, skills, config)
+│   └── solution-design.md          # Technical architecture (this document)
 ├── src/
 │   ├── index.ts                    # Probot app entry point
 │   ├── handlers/
@@ -871,28 +880,30 @@ deploy-checklist-bot/
 │   │   └── issue-comment.ts        # Comment edited handler
 │   ├── services/
 │   │   ├── config-loader.ts        # Config file loading & validation
-│   │   ├── diff-analyzer.ts        # Claude integration & diff analysis
+│   │   ├── diff-analyzer.ts        # Skill detection, Claude tool use, response parsing
 │   │   ├── checklist.ts            # Markdown generation & parsing
 │   │   └── review-manager.ts       # GitHub review management
+│   ├── skills/
+│   │   └── index.ts                # 14 built-in skills, detectActiveSkills(), computeUncoveredFiles()
 │   ├── prompts/
-│   │   └── analysis.ts             # Claude prompt templates
+│   │   └── analysis.ts             # Claude prompt assembly
 │   ├── schemas/
 │   │   ├── config.ts               # Zod schema for config validation
-│   │   └── analysis-result.ts      # Zod schema for Claude response
+│   │   └── analysis-result.ts      # Zod schema for Claude tool use response
 │   └── utils/
 │       ├── diff-truncation.ts      # Smart diff truncation logic
 │       └── debounce.ts             # Webhook debouncing
 ├── test/
-│   ├── fixtures/
-│   │   ├── diffs/                  # Sample diffs for testing
-│   │   ├── configs/                # Sample config files
-│   │   └── payloads/               # Sample webhook payloads
 │   ├── handlers/
 │   │   ├── pull-request.test.ts
 │   │   └── issue-comment.test.ts
+│   ├── prompts/
+│   │   └── analysis.test.ts
 │   └── services/
 │       ├── config-loader.test.ts
 │       ├── diff-analyzer.test.ts
+│       ├── diff-analyzer-companion.test.ts
+│       ├── diff-truncation.test.ts
 │       ├── checklist.test.ts
 │       └── review-manager.test.ts
 ├── .env.example
