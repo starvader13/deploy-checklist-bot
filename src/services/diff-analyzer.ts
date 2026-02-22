@@ -9,13 +9,59 @@ import type { DeployChecklistConfig, Rule } from "../schemas/config.js";
 import { SYSTEM_PROMPT, buildUserPrompt } from "../prompts/analysis.js";
 import { truncateDiff } from "../utils/diff-truncation.js";
 import { minimatch } from "minimatch";
+import {
+  detectActiveSkills,
+  computeUncoveredFiles,
+  type Skill,
+} from "../skills/index.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAX_RETRIES = 2;
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool use definition — submitted to Claude to enforce structured output
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SUBMIT_ANALYSIS_TOOL = {
+  name: "submit_analysis",
+  description: "Submit the structured deploy checklist analysis for this PR.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            rule_id:     { type: "string" },
+            check:       { type: "string" },
+            description: { type: "string" },
+            reasoning:   { type: "string" },
+            priority:    { type: "string", enum: ["high", "medium", "low"] as string[] },
+          },
+          required: ["rule_id", "check", "description", "reasoning", "priority"] as string[],
+        },
+      },
+      summary:         { type: "string" },
+      uncovered_files: { type: "array", items: { type: "string" } },
+      open_concerns: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            file:    { type: "string" },
+            concern: { type: "string" },
+          },
+          required: ["file", "concern"] as string[],
+        },
+      },
+    },
+    required: ["items", "summary"] as string[],
+  },
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -23,6 +69,23 @@ const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 
 function createAnthropicClient(): Anthropic {
   return new Anthropic();
+}
+
+/**
+ * Convert Skill[] to Rule[] so truncateDiff and fetchTriggeredFileContents
+ * need zero signature changes.
+ */
+function skillsToRules(skills: Skill[]): Rule[] {
+  return skills.map((skill) => ({
+    id: skill.id,
+    description: skill.name,
+    trigger: {
+      paths: skill.paths,
+      missing_companion: skill.companionPaths,
+      include_full_files: skill.includeFullFiles,
+    },
+    checks: skill.checks,
+  }));
 }
 
 /** Fetch the raw unified diff for a PR using the GitHub diff media type. */
@@ -55,23 +118,6 @@ export function extractFilesFromDiff(diff: string): string[] {
   }
 
   return [...new Set(files)];
-}
-
-/**
- * Parse Claude's response into a validated AnalysisResult.
- * Claude sometimes wraps JSON in markdown code fences despite being told not to — strip them first.
- * Zod validation ensures the response matches the expected schema; throws on invalid shape.
- */
-function parseAnalysisResponse(responseText: string): AnalysisResult {
-  let cleaned = responseText.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned
-      .replace(/^```(?:json)?\s*\n?/, "")
-      .replace(/\n?```\s*$/, "");
-  }
-
-  const parsed = JSON.parse(cleaned);
-  return AnalysisResultSchema.parse(parsed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,78 +215,67 @@ export async function analyzeDiff(
   const anthropic = createAnthropicClient();
   const model = process.env.CLAUDE_MODEL || DEFAULT_MODEL;
 
-  // Truncate diff to fit within the token budget
+  // Extract file paths from diff for skill detection and file fetching
+  const filesChanged = extractFilesFromDiff(diff);
+
+  // Detect which skills apply to this diff (pre-filtering before Claude)
+  const activeSkills = detectActiveSkills(filesChanged, diff);
+
+  // Compute files not covered by any skill's path patterns
+  const uncoveredFiles = computeUncoveredFiles(filesChanged, activeSkills);
+
+  // Merge skill-derived rules with user config rules for truncation + file fetching
+  const skillRules = skillsToRules(activeSkills);
+  const allRulesForTruncation = [...skillRules, ...config.rules];
+
+  // Truncate diff to fit within the token budget, prioritizing skill-matched paths
   const { diff: truncatedDiff } = truncateDiff(
     diff,
     config.settings.max_diff_size,
-    config.rules
+    allRulesForTruncation
   );
 
-  // Extract file paths from diff for pattern matching and file fetching
-  const filesChanged = extractFilesFromDiff(diff);
-
-  // Fetch full file contents for rules with include_full_files (e.g. entity/model files)
+  // Fetch full file contents for skills/rules with include_full_files
   const fileContents = await fetchTriggeredFileContents(
     context,
     repoInfo.owner,
     repoInfo.repo,
     repoInfo.ref,
-    config.rules,
+    allRulesForTruncation,
     filesChanged
   );
 
-  // Try analysis with retries on parse failures
-  let lastError: Error | null = null;
+  try {
+    const userPrompt = buildUserPrompt(
+      config,
+      prMeta,
+      truncatedDiff,
+      activeSkills,
+      uncoveredFiles,
+      fileContents
+    );
 
-  // Retry loop: on parse failures, re-prompt with strict JSON instructions.
-  // Auth errors (401/403) are unrecoverable, so we break immediately.
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      // isRetry=true adds strict "respond with JSON only" instructions to reduce parse failures
-      const isRetry = attempt > 0;
-      const userPrompt = buildUserPrompt(
-        config,
-        prMeta,
-        truncatedDiff,
-        isRetry,
-        fileContents
-      );
+    const response = await anthropic.messages.create({
+      model,
+      max_tokens: 4000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userPrompt }],
+      tools: [SUBMIT_ANALYSIS_TOOL],
+      tool_choice: { type: "tool", name: "submit_analysis" },
+    });
 
-      const response = await anthropic.messages.create({
-        model,
-        max_tokens: 2000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userPrompt }],
-      });
-
-      // Claude response has content blocks (text, tool_use, etc.) — extract the text block
-      const textBlock = response.content.find(
-        (block) => block.type === "text"
-      );
-      if (!textBlock || textBlock.type !== "text") {
-        throw new Error("No text content in Claude response");
-      }
-
-      // Parse the JSON response and validate against the Zod schema
-      return parseAnalysisResponse(textBlock.text);
-    } catch (error: unknown) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      context.log.warn(
-        `Analysis attempt ${attempt + 1} failed: ${lastError.message}`
-      );
-
-      // Don't retry on auth errors
-      if (
-        lastError.message.includes("401") ||
-        lastError.message.includes("403")
-      ) {
-        break;
-      }
+    const toolUseBlock = response.content.find(
+      (block) => block.type === "tool_use"
+    );
+    if (!toolUseBlock || toolUseBlock.type !== "tool_use") {
+      throw new Error("No tool_use block in Claude response");
     }
-  }
 
-  context.log.error(
-    `Analysis failed after ${MAX_RETRIES + 1} attempts: ${lastError?.message}`
-  );
-  return null;
+    // toolUseBlock.input is already a parsed object — no JSON.parse, no fence stripping
+    return AnalysisResultSchema.parse(toolUseBlock.input);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    context.log.error(`Analysis failed: ${message}`);
+    return null;
+  }
 }

@@ -1,9 +1,10 @@
 import type { DeployChecklistConfig, Rule } from "../schemas/config.js";
 import type { PRMetadata } from "../schemas/analysis-result.js";
+import type { Skill } from "../skills/index.js";
 
-export const SYSTEM_PROMPT = `You are a deploy checklist analyzer. You examine pull request diffs against a set of deployment rules and determine which checklist items apply.
+export const SYSTEM_PROMPT = `You are a deploy checklist analyzer. You examine pull request diffs and determine which checklist items apply based on active skills and custom rules.
 
-You respond ONLY with valid JSON matching the specified schema. Do not include any text before or after the JSON. Do not wrap in markdown code fences.`;
+Use the submit_analysis tool to return your findings. Only include items genuinely relevant to the actual changes in the diff.`;
 
 /**
  * Format a single rule into a human-readable string for the prompt.
@@ -37,26 +38,56 @@ function formatRule(rule: Rule): string {
 }
 
 /**
+ * Format a single skill into a human-readable string for the prompt.
+ * Includes the systemContext (multi-framework domain knowledge) and checks.
+ */
+function formatSkill(skill: Skill): string {
+  const parts = [`### Skill: ${skill.id}`, skill.systemContext, `Checks:`];
+  for (const check of skill.checks) {
+    parts.push(`  - ${check}`);
+  }
+  if (skill.companionPaths?.length) {
+    parts.push(
+      `Expected companion files: ${skill.companionPaths.join(", ")}`
+    );
+  }
+  return parts.join("\n");
+}
+
+/**
  * Build the complete user prompt for Claude analysis.
- * Assembles sections: context → rules → PR info → file contents → diff → instructions.
- * The order matters — Claude sees rules before the diff, so it knows what to look for.
+ * Assembles sections: context → active skills → custom rules → PR info → file contents
+ *                    → uncovered files → diff → instructions.
+ * The order matters — Claude sees skills/rules before the diff, so it knows what to look for.
  */
 export function buildUserPrompt(
   config: DeployChecklistConfig,
   prMeta: PRMetadata,
   diff: string,
-  strict: boolean = false,
+  activeSkills: Skill[] = [],
+  uncoveredFiles: string[] = [],
   fileContents?: Map<string, string>
 ): string {
   const sections: string[] = [];
 
-  // Optional user-provided context (e.g. "This is a Django monorepo with PostgreSQL")
+  // Active skills — pre-filtered to only those matching this diff
+  if (activeSkills.length > 0) {
+    const skillsText = activeSkills.map(formatSkill).join("\n\n");
+    sections.push(`## Active Skills\n${skillsText}`);
+  }
+
+  // Custom rules from user config (backward compat) — omitted when empty
+  if (config.rules.length > 0) {
+    const rulesText = config.rules.map(formatRule).join("\n\n");
+    sections.push(`## Custom Rules\n${rulesText}`);
+  }
+
+  // User-provided repo context comes after skills so it acts as a correction layer —
+  // repo-specific facts (e.g. "we use Flyway, rollbacks are automatic") override
+  // the generic skill knowledge via recency bias.
   if (config.context) {
     sections.push(`## Repository Context\n${config.context}`);
   }
-
-  const rulesText = config.rules.map(formatRule).join("\n\n");
-  sections.push(`## Rules\n${rulesText}`);
 
   sections.push(
     `## PR Information\n` +
@@ -66,11 +97,11 @@ export function buildUserPrompt(
       `Files changed: ${prMeta.filesChanged.join(", ")}`
   );
 
-  // Full file contents for triggered rules (opt-in via include_full_files)
+  // Full file contents for triggered skills/rules (opt-in via includeFullFiles)
   if (fileContents && fileContents.size > 0) {
     const fileSections: string[] = [
       "## Full File Contents (for context)",
-      "The following files triggered a rule. Full content provided so you can identify",
+      "The following files triggered a skill. Full content provided so you can identify",
       "the framework/ORM and assess whether changes affect the database schema.",
     ];
     for (const [filePath, content] of fileContents) {
@@ -79,42 +110,28 @@ export function buildUserPrompt(
     sections.push(fileSections.join("\n"));
   }
 
-  sections.push(`## Diff\n\`\`\`diff\n${diff}\n\`\`\``);
-
-  let instructions =
-    `## Instructions\n` +
-    `Analyze the diff against each rule. For each rule whose trigger ` +
-    `conditions match files in the diff, evaluate each check and determine ` +
-    `if it is relevant to the actual changes.\n\n` +
-    `Respond with JSON matching this schema:\n` +
-    `{\n` +
-    `  "items": [\n` +
-    `    {\n` +
-    `      "rule_id": "string — the rule ID that triggered this item",\n` +
-    `      "check": "string — the specific check from the rule",\n` +
-    `      "description": "string — a concise, actionable checklist item specific to this PR (reference exact files/lines)",\n` +
-    `      "reasoning": "string — brief explanation of why this check is relevant to the changes in this diff",\n` +
-    `      "priority": "high | medium | low"\n` +
-    `    }\n` +
-    `  ],\n` +
-    `  "summary": "string — one sentence summarizing overall deploy risk"\n` +
-    `}\n\n` +
-    `For every rule whose trigger conditions match files in the diff, you MUST ` +
-    `include ALL checks from that rule in the output — do not skip any. ` +
-    `Even if a check seems already addressed, include it so the deployer can ` +
-    `explicitly confirm. Be specific — reference actual file names, function ` +
-    `names, and line numbers from the diff.`;
-
-  // On retry attempts, add strict JSON instructions to reduce parse failures
-  if (strict) {
-    instructions +=
-      `\n\nIMPORTANT: Your response must be ONLY valid JSON. ` +
-      `No markdown, no code fences, no explanatory text. ` +
-      `Start with { and end with }. ` +
-      `If no items apply, return: {"items": [], "summary": "No deploy checklist items needed."}`;
+  // Files not matched by any skill or custom rule — Claude should flag deploy risks
+  if (uncoveredFiles.length > 0) {
+    const uncoveredSection = [
+      "## Files Without Skill Coverage",
+      "The following changed files were not matched by any skill or custom rule.",
+      "For each, add an entry to open_concerns if you spot a deploy risk:",
+      "",
+      ...uncoveredFiles.map((f) => `- ${f}`),
+    ];
+    sections.push(uncoveredSection.join("\n"));
   }
 
-  sections.push(instructions);
+  sections.push(`## Diff\n\`\`\`diff\n${diff}\n\`\`\``);
+
+  sections.push(
+    `## Instructions\n` +
+      `Use the submit_analysis tool to return your findings.\n` +
+      `For each active skill, evaluate its checks against the diff.\n` +
+      `Only include items genuinely relevant to the actual changes.\n` +
+      `Be specific — reference actual file names, function names, and line numbers from the diff.\n` +
+      `For uncovered files, add to open_concerns only if you spot a real deploy risk.`
+  );
 
   return sections.join("\n\n");
 }

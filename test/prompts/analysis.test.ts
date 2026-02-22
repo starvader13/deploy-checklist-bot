@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildUserPrompt } from "../../src/prompts/analysis.js";
 import type { DeployChecklistConfig } from "../../src/schemas/config.js";
 import type { PRMetadata } from "../../src/schemas/analysis-result.js";
+import type { Skill } from "../../src/skills/index.js";
 
 const baseConfig: DeployChecklistConfig = {
   version: 1,
@@ -44,7 +45,8 @@ describe("buildUserPrompt — file contents", () => {
       baseConfig,
       basePRMeta,
       "diff content",
-      false,
+      [],
+      [],
       fileContents
     );
 
@@ -63,7 +65,8 @@ describe("buildUserPrompt — file contents", () => {
       baseConfig,
       basePRMeta,
       "diff content",
-      false,
+      [],
+      [],
       new Map()
     );
     expect(prompt).not.toContain("## Full File Contents");
@@ -78,11 +81,116 @@ describe("buildUserPrompt — file contents", () => {
       baseConfig,
       basePRMeta,
       "diff content",
-      false,
+      [],
+      [],
       fileContents
     );
 
     expect(prompt).toContain("### src/models/User.py");
     expect(prompt).toContain("### src/models/Post.py");
+  });
+});
+
+describe("buildUserPrompt — active skills", () => {
+  const fakeSkill: Skill = {
+    id: "test-skill",
+    name: "Test Skill",
+    paths: ["src/**"],
+    detect: () => true,
+    systemContext: "Test system context for the skill.",
+    checks: ["Verify something important"],
+  };
+
+  it("includes Active Skills section when skills are provided", () => {
+    const prompt = buildUserPrompt(
+      baseConfig,
+      basePRMeta,
+      "diff content",
+      [fakeSkill],
+      []
+    );
+
+    expect(prompt).toContain("## Active Skills");
+    expect(prompt).toContain("### Skill: test-skill");
+    expect(prompt).toContain("Test system context for the skill.");
+    expect(prompt).toContain("Verify something important");
+  });
+
+  it("omits Active Skills section when no skills provided", () => {
+    const prompt = buildUserPrompt(
+      baseConfig,
+      basePRMeta,
+      "diff content",
+      [],
+      []
+    );
+    expect(prompt).not.toContain("## Active Skills");
+  });
+});
+
+describe("buildUserPrompt — uncovered files", () => {
+  it("includes uncovered files section when uncoveredFiles is non-empty", () => {
+    const prompt = buildUserPrompt(
+      baseConfig,
+      basePRMeta,
+      "diff content",
+      [],
+      ["src/unusual/file.ts", "src/other.ts"]
+    );
+
+    expect(prompt).toContain("## Files Without Skill Coverage");
+    expect(prompt).toContain("- src/unusual/file.ts");
+    expect(prompt).toContain("- src/other.ts");
+  });
+
+  it("omits uncovered files section when uncoveredFiles is empty", () => {
+    const prompt = buildUserPrompt(
+      baseConfig,
+      basePRMeta,
+      "diff content",
+      [],
+      []
+    );
+    expect(prompt).not.toContain("## Files Without Skill Coverage");
+  });
+});
+
+describe("buildUserPrompt — custom rules", () => {
+  it("includes Custom Rules section when config has rules", () => {
+    const prompt = buildUserPrompt(
+      baseConfig,
+      basePRMeta,
+      "diff content",
+      [],
+      []
+    );
+
+    expect(prompt).toContain("## Custom Rules");
+    expect(prompt).toContain("### Rule: test-rule");
+  });
+
+  it("omits Custom Rules section when config has no rules", () => {
+    const configNoRules: DeployChecklistConfig = { ...baseConfig, rules: [] };
+    const prompt = buildUserPrompt(
+      configNoRules,
+      basePRMeta,
+      "diff content",
+      [],
+      []
+    );
+    expect(prompt).not.toContain("## Custom Rules");
+  });
+});
+
+describe("buildUserPrompt — instructions", () => {
+  it("includes tool use instruction", () => {
+    const prompt = buildUserPrompt(baseConfig, basePRMeta, "diff content");
+    expect(prompt).toContain("submit_analysis tool");
+  });
+
+  it("does not include JSON schema in instructions", () => {
+    const prompt = buildUserPrompt(baseConfig, basePRMeta, "diff content");
+    expect(prompt).not.toContain('"items"');
+    expect(prompt).not.toContain('"summary"');
   });
 });

@@ -26,11 +26,15 @@ const sampleResult: AnalysisResult = {
     },
   ],
   summary: "Medium risk — database migration and new env var detected.",
+  uncovered_files: [],
+  open_concerns: [],
 };
 
 const emptyResult: AnalysisResult = {
   items: [],
   summary: "No deploy checklist items needed.",
+  uncovered_files: [],
+  open_concerns: [],
 };
 
 describe("generateChecklist", () => {
@@ -149,6 +153,8 @@ describe("mergeChecklist", () => {
         },
       ],
       summary: "Updated analysis.",
+      uncovered_files: [],
+      open_concerns: [],
     };
 
     const merged = mergeChecklist(oldState, newResult, "def456");
@@ -164,6 +170,8 @@ describe("mergeChecklist", () => {
     const newResult: AnalysisResult = {
       items: [sampleResult.items[1]],
       summary: "Reduced risk.",
+      uncovered_files: [],
+      open_concerns: [],
     };
 
     const merged = mergeChecklist(oldState, newResult, "def456");
