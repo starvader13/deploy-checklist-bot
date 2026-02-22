@@ -1,0 +1,13 @@
+# Don't send these to Docker's build context.
+# Smaller build context = faster builds, no accidental secret leaks.
+
+node_modules
+dist
+.env
+.env.*
+*.log
+.git
+.github
+test
+docs
+coverage
