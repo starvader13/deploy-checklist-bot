@@ -41,9 +41,9 @@ COPY --from=builder /app/dist ./dist
 # Drop root privileges before starting the process.
 USER appuser
 
-# Document that the app listens on port 3000.
-# Actual port binding happens at runtime: docker run -p 3000:3000
-EXPOSE 3000
+# Document that the app listens on port 8080.
+# Actual port binding happens at runtime: docker run -p 8080:3000
+EXPOSE 8080
 
 # Start Probot with the compiled entry point.
 CMD ["node_modules/.bin/probot", "run", "./dist/index.js"]
