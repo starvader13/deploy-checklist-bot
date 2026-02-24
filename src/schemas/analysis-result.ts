@@ -14,7 +14,7 @@ export const ChecklistItemSchema = z.object({
 
 export const AnalysisResultSchema = z.object({
   items: z.array(ChecklistItemSchema),
-  summary: z.string(),
+  summary: z.string().default(""),
   uncovered_files: z.array(z.string()).default([]),
   open_concerns: z.array(z.object({
     file: z.string(),

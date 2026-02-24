@@ -4,7 +4,8 @@ import type { Skill } from "../skills/index.js";
 
 export const SYSTEM_PROMPT = `You are a deploy checklist analyzer. You examine pull request diffs and determine which checklist items apply based on active skills and custom rules.
 
-Use the submit_analysis tool to return your findings. Only include items genuinely relevant to the actual changes in the diff.`;
+Use the submit_analysis tool to return your findings. Only include items genuinely relevant to the actual changes in the diff.
+Always include a one-sentence summary describing the overall risk level of the PR.`;
 
 /**
  * Format a single rule into a human-readable string for the prompt.
