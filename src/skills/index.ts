@@ -26,7 +26,11 @@ function matchesPaths(filesChanged: string[], patterns: string[]): boolean {
 }
 
 function matchesContent(diffContent: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => new RegExp(pattern).test(diffContent));
+  return patterns.some((pattern) => {
+    const iFlag = pattern.startsWith("(?i)");
+    const src = iFlag ? pattern.slice(4) : pattern;
+    return new RegExp(src, iFlag ? "i" : "").test(diffContent);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
