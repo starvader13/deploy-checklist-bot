@@ -41,8 +41,7 @@ COPY --from=builder /app/dist ./dist
 # Drop root privileges before starting the process.
 USER appuser
 
-# Document that the app listens on port 8080.
-# Actual port binding happens at runtime: docker run -p 8080:3000
+# Probot listens on port 8080 (set via PORT env var).
 EXPOSE 8080
 
 # Start Probot with the compiled entry point.
