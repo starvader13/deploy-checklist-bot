@@ -16,12 +16,15 @@ export const BOT_MARKER = "<!-- deploy-checklist-bot:v1 -->";
 const SHA_REGEX = /<!-- sha:(\w+) -->/;
 
 /**
- * Parses a checklist line like: - [x] **Description** 🔴 — Reasoning\n  _Rule: rule-id_
- * Captures: [1] checked state (" " or "x"), [2] description, [3] reasoning, [4] rule ID
+ * Parses a checklist item block like:
+ *   - [x] **Check** 🔴
+ *     Description — Reasoning
+ *     _Rule: rule-id_
+ * Captures: [1] checked state, [2] check, [3] description, [4] reasoning, [5] rule ID
  * Global flag (/g) lets us use exec() in a while loop to extract all items.
  */
 const ITEM_REGEX =
-  /- \[([ x])\] \*\*(.+?)\*\*(?:\s*[^\n—]*)— (.+?)\n\s+_Rule: (.+?)_/g;
+  /- \[([ x])\] \*\*(.+?)\*\*[^\n]*\n\s+(.+?)\s*—\s*(.+?)\n\s+_Rule: (.+?)_/g;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -58,7 +61,8 @@ export function generateChecklist(
     const priorityBadge =
       item.priority === "high" ? " 🔴" : item.priority === "medium" ? " 🟡" : "";
     lines.push(
-      `- [ ] **${item.description}**${priorityBadge} — ${item.reasoning}`,
+      `- [ ] **${item.check}**${priorityBadge}`,
+      `  ${item.description} — ${item.reasoning}`,
       `  _Rule: ${item.rule_id}_`,
       ""
     );
@@ -112,13 +116,13 @@ export function parseChecklist(commentBody: string): ChecklistState | null {
 
   // exec() with /g returns one match per call, advancing lastIndex each time
   while ((match = ITEM_REGEX.exec(commentBody)) !== null) {
-    const [, checkedChar, description, reasoning, ruleId] = match;
+    const [, checkedChar, check, description, reasoning, ruleId] = match;
 
     items.push({
       checked: checkedChar === "x",
       item: {
         rule_id: ruleId,
-        check: "",  // Not recoverable from markdown — only stored in analysis results
+        check,
         description,
         reasoning,
         priority: "medium",  // Priority badge is visual only — default to medium when parsing back
@@ -142,11 +146,11 @@ export function mergeChecklist(
   newResult: AnalysisResult,
   newSha: string
 ): string {
-  // Build lookup: "rule_id:description" → was_checked.
-  // Using composite key so items match even if reasoning or priority changed.
+  // Build lookup: "rule_id:check" → was_checked.
+  // Using composite key so items match even if description, reasoning, or priority changed.
   const oldItemMap = new Map<string, boolean>();
   for (const item of oldState.items) {
-    const key = `${item.item.rule_id}:${item.item.description}`;
+    const key = `${item.item.rule_id}:${item.item.check}`;
     oldItemMap.set(key, item.checked);
   }
 
@@ -171,14 +175,15 @@ export function mergeChecklist(
   );
 
   for (const item of sorted) {
-    const key = `${item.rule_id}:${item.description}`;
+    const key = `${item.rule_id}:${item.check}`;
     const wasChecked = oldItemMap.get(key) ?? false;
     const checkbox = wasChecked ? "x" : " ";
 
     const priorityBadge =
       item.priority === "high" ? " 🔴" : item.priority === "medium" ? " 🟡" : "";
     lines.push(
-      `- [${checkbox}] **${item.description}**${priorityBadge} — ${item.reasoning}`,
+      `- [${checkbox}] **${item.check}**${priorityBadge}`,
+      `  ${item.description} — ${item.reasoning}`,
       `  _Rule: ${item.rule_id}_`,
       ""
     );

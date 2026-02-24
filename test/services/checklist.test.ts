@@ -46,11 +46,14 @@ describe("generateChecklist", () => {
     expect(md).toContain("## Deploy Checklist");
   });
 
-  it("includes all checklist items as unchecked checkboxes", () => {
+  it("includes all checklist items as unchecked checkboxes with check as title", () => {
     const md = generateChecklist(sampleResult, "abc123");
 
-    expect(md).toContain("- [ ] **Verify migration rollback");
-    expect(md).toContain("- [ ] **Add DATABASE_URL");
+    expect(md).toContain("- [ ] **Verify rollback exists**");
+    expect(md).toContain("- [ ] **Confirm env vars set**");
+    // Description + reasoning on the next line
+    expect(md).toContain("Verify migration rollback for migrations/20240115_add_users.sql — New migration file detected.");
+    expect(md).toContain("Add DATABASE_URL to production environment — New env var referenced");
   });
 
   it("includes rule IDs for each item", () => {
@@ -160,7 +163,7 @@ describe("mergeChecklist", () => {
     const merged = mergeChecklist(oldState, newResult, "def456");
 
     expect(merged).toContain("docker-change");
-    expect(merged).toContain("- [ ] **Check Docker base image");
+    expect(merged).toContain("- [ ] **Verify base image**");
   });
 
   it("removes items that no longer apply", () => {

@@ -37,7 +37,7 @@ const SUBMIT_ANALYSIS_TOOL = {
           type: "object",
           properties: {
             rule_id:     { type: "string" },
-            check:       { type: "string" },
+            check:       { type: "string", description: "Short imperative label (5-8 words) shown as the checklist title, e.g. 'Verify rollback exists'" },
             description: { type: "string" },
             reasoning:   { type: "string" },
             priority:    { type: "string", enum: ["high", "medium", "low"] as string[] },
